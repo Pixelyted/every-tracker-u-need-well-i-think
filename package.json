@@ -1,0 +1,23 @@
+{
+  "name": "dungeon-planner",
+  "version": "0.1.0",
+  "description": "A pixel-dungeon schedule maker for Fedora",
+  "main": "main.js",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "start": "electron .",
+    "install-desktop": "node scripts/install-desktop.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "devDependencies": {
+    "electron": "^45.4.1"
+  },
+  "dependencies": {
+    "@googleapis/calendar": "^20.2.0",
+    "google-auth-library": "^11.3.4"
+  }
+}

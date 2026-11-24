@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>every tracker u need, well i think</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="torch" aria-hidden="true"><span class="flame"></span></div>
+      <h1 id="week-title" class="title">⚔ WEEK – · FLOOR – ⚔</h1>
+      <div class="torch" aria-hidden="true"><span class="flame"></span></div>
+      <div class="tabs">
+        <button id="tab-week" class="tab on">⚔ Week</button>
+        <button id="tab-profile" class="tab">🛡 Profile</button>
+        <button id="tab-treasury" class="tab">💰 Treasury</button>
+      </div>
+      <nav class="nav">
+        <button id="prev-week" class="btn">◀ prev</button>
+        <button id="this-week" class="btn">today</button>
+        <button id="next-week" class="btn">next ▶</button>
+      </nav>
+    </header>
+
+    <main id="week-screen" class="layout">
+      <section class="panel week" aria-label="Week view">
+        <div id="day-heads" class="day-heads"></div>
+        <div id="banners" class="banners"></div>
+        <div id="bounty-strip" class="bounty-strip" aria-label="Bounties due this week"></div>
+        <div class="grid-wrap">
+          <div id="time-axis" class="time-axis"></div>
+          <div id="grid" class="grid"></div>
+        </div>
+      </section>
+
+      <aside class="side">
+        <section class="panel today" aria-label="Today's quests">
+          <h2 id="today-title" class="panel-title">▶ TODAY'S QUESTS</h2>
+          <ol id="today-list" class="today-list"></ol>
+        </section>
+        <section class="panel bounties" aria-label="Bounties">
+          <h2 class="panel-title">📜 BOUNTIES</h2>
+          <ol id="bounty-list" class="bounty-list"></ol>
+        </section>
+        <div class="actions">
+          <button id="reconnect-google" class="btn btn-danger" hidden title="The Google sign-in expired, so changes are not reaching your phone">⚠ Google disconnected · Reconnect</button>
+          <button id="new-quest" class="btn btn-big">+ New Quest</button>
+          <button id="new-bounty" class="btn">📜 New Bounty</button>
+          <button id="open-breaks" class="btn">🏕 Breaks</button>
+          <button id="open-settings" class="btn">⚙ Settings</button>
+        </div>
+      </aside>
+    </main>
+
+    <main id="profile-screen" class="profile" hidden></main>
+    <main id="treasury-screen" class="treasury" hidden></main>
+  </div>
+
+  <div id="modal-root"></div>
+  <script src="app.js"></script>
+  <script src="forms.js"></script>
+  <script src="avatar.js"></script>
+  <script src="profile.js"></script>
+  <script src="treasury.js"></script>
+</body>
+</html>
