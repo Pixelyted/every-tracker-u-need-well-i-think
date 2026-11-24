@@ -1,8 +1,8 @@
-# How every tracker u need, well i think Was Built: A Learning Guide
+# How "every tracker u need, well i think" Was Built: A Learning Guide
 
 21 November 2026
 
-every tracker u need, well i think was built in nine phases: write down what it must do, plan the work, then build it from the inside out (rules first, screen last), testing every piece before moving on. The same flow works for any app you build next.
+The app (first called *Dungeon Planner*) was built in nine phases, and three more followed: write down what it must do, plan the work, then build it from the inside out (rules first, screen last), testing every piece before moving on. The same flow works for any app you build next.
 
 ## The big picture
 
@@ -248,6 +248,52 @@ On 24 November the six small issues left from the review were fixed, the same wa
 
 Using the app turned up one more bug: deleting one week of a weekly class in Google never brought it back (see Phase 8 for how it works now). The push now also runs every 30 minutes. The suite went from 118 to 127 tests.
 
+## Phase 10: Bounties and the Profile
+
+Two features were added the same way as v1: a short design doc, a plan, then test-first tasks.
+
+- **📜 Bounties** are deadlines: a name, a due date and time, ticked when done. Each is pushed to Google as a 15-minute event with two reminders.
+- **🛡 Profile** is a character sheet: Daily and Weekly habit quests, XP and levels, and a pixel knight whose gear changes with the level.
+
+The one real design question was how to store XP. Working it out fresh from the data each time is less code, but deleting a class or editing a value would quietly change XP already earned. So XP is a **log**: one row per award, each with a unique key (`habit:3@2026-11-24`), so ticking twice can never pay twice and unticking removes exactly that row. When "earned stays earned" matters, store the event; don't recompute it.
+
+This was also the first build done with **helpers**: a fresh builder wrote each task, and a separate fresh reviewer checked it before the next one began. Every task left a written report and a review, so mistakes were caught one task at a time instead of all at the end.
+
+## Phase 11: Finances from bank PDFs
+
+The 💰 Treasury tab reads BCA "mutasi rekening" PDFs and tracks spending against a 50/30/20 split of each monthly allowance. Its specs are [`docs/superpowers/specs/2026-11-24-finances-design.md`](superpowers/specs/2026-11-24-finances-design.md) and the plan next to it.
+
+**Look at the real input first.** Before any design, the real statements were read locally (never copied into the repo). Five facts from them changed the design: each file covers about 8 days, there is no balance column, shop names are cut to 10 characters, two files were exact copies, and three real 28,000 charges sat on one day.
+
+That last fact is the most useful one. Bank rows have no ID, and identical rows can be real. So "is this a duplicate?" is answered by **counting**, not by sameness: if a file has a row 3 times and the database has it 2 times, add 1.
+
+The layers follow the same rule as v1, rules at the bottom with no files or screen:
+
+| File | Job | Pure? |
+| --- | --- | --- |
+| `src/pdf-text.js` | runs `pdftotext -layout` (the only file that starts a program) | no |
+| `src/bca-parse.js` | text → rows: date, amount in sen, DB/CR, text, type | yes |
+| `src/merchant.js` | row → a short merchant key; card numbers removed | yes |
+| `src/finance.js` | duplicates, refunds, cycles, 50/30/20 totals, balance | yes |
+| `src/db.js` | three new tables (schema version 4) | no |
+| `ui/treasury.js` | draws only what it is sent | no |
+
+Two habits from this phase:
+
+- **Money is whole numbers.** Every amount is stored in sen (`50,000.00` → `5000000`), so no decimal maths can drift. Only the window turns it back into rupiah.
+- **Check against the real thing, privately.** After all tests passed, a throwaway script outside the repo imported the real PDFs into a database that lived only in memory, and printed counts only. It found a bug no made-up test had: every statement ends with lines holding only `DB` (a totals block), and they got glued onto the last payment.
+
+The feature ended at 249 tests and was squash-merged, so the branch's 18 commits became one on `master`.
+
+## Phase 12: Going public
+
+Making a repo public means everything in it, including its history, can be read by anyone. A scan found the developer's name and real timetable in 7 files and in all 34 commits, and no LICENSE file.
+
+1. **Scrub the files:** made-up example data (Potion Brewing 101, Rune Geometry…), they/them in the docs, new screenshots.
+2. **Add a license:** MIT. Without one, nobody may legally use the code.
+3. **Drop the history:** copy the clean files into a new folder and make one fresh commit there. That became the public repo; the private one stays as the archive. Rewriting history in place was the other option, but it can't be undone.
+4. **Rename the app** to "every tracker u need, well i think". Only the visible name changed: file and folder names stay `dungeon-planner`, because Electron finds its data folder from them, so a full rename would have hidden every existing user's data.
+
 ## Lessons worth keeping
 
 Every bug below was real, and each one teaches something you'll meet again.
@@ -264,6 +310,11 @@ Every bug below was real, and each one teaches something you'll meet again.
 | A deleted Google event never came back | Only changed fingerprints were sent, so "nothing changed" meant nothing was sent | Comparing with your own records can't see changes made elsewhere: look at the real thing |
 | One deleted week of a weekly class never came back | The push checked that the series existed, but Google stores a changed week as a separate linked "exception" | A fake only behaves the way you assumed: learn how the real system stores things before writing the fake |
 | The edit warning listed make-ups the save would delete | The same rule was written twice, in two files, slightly differently | Write a rule once and have both places call it |
+| The last payment of every statement had a broken type | A totals block made of lone `DB` lines was read as part of that row | Run your parser on the real input before trusting made-up fixtures |
+| Transfer rows were about to be read as QR payments | `100000.00BUDI` contains the QR marker `00000.00` too | Anchor a pattern on something only that row kind has (`QR 914`) |
+| The balance chart looked flat | Bars were scaled from 0, and balances differ by little compared with their size | Scale a chart between its lowest and highest value |
+| A new box put a border around a whole column | Its CSS class name was already used by the column | Search for a class name before you reuse one |
+| Git history still held real data after the files were cleaned | History keeps every old version of every file | Before going public, start fresh history or rewrite it |
 
 The pattern in most of them: the code was fine, but the test or the check was wrong. Making each check fail once on purpose is what caught them.
 
@@ -280,6 +331,8 @@ Work through these in order. Each one uses the real code in your repo and ends w
 - [ ] **Try the smoke mode.** `node scripts/seed-dev.js`, then `DUNGEON_DEV=1 DUNGEON_SMOKE=1 DUNGEON_SHOT=week.png npm start`, and open the screenshot.
 - [ ] **Change the skin.** Change one colour variable in `ui/style.css` (for example `--torch`) and look at the result.
 - [ ] **Study a real fix.** Run `git show 74a88cd` (the six leftover fixes). For each one, find the test that was written first, then the lines that made it pass. Undo one fix by hand and watch its test fail.
+- [ ] **Read a bank row.** Open `test/bca-fixture.js`, pick one made-up row, and trace it through `parseMutasi` in `src/bca-parse.js` and `merchantKey` in `src/merchant.js` by hand. Check your answer with a small test.
+- [ ] **Count, don't compare.** Read `newRows` in `src/finance.js`, then write a test with two identical charges in the database and three in a file. How many get added?
 - [ ] **A small feature, the full way.** Write a half-page spec for "export this week as text", then a plan with the function names, then build it test-first on a new branch.
 
 Tip: when you get stuck, ask the question this guide asks at every step: can I test this piece without the screen?
@@ -292,6 +345,7 @@ Tip: when you get stuck, ask the question this guide asks at every step: can I t
 | Branch | A separate line of commits, so unfinished work doesn't touch `master` |
 | CommonJS | Node's `require(...)` / `module.exports` way of splitting code into files |
 | CSP | Content-Security-Policy: a rule in the page saying which scripts may run |
+| Cycle | In the Treasury, the days from one allowance to the next |
 | Debounce | Wait until changes stop (here 2 s) before acting once |
 | Electron | Runs a web page as a desktop app, with Node.js behind it |
 | EXDATE | A date left out of a repeating calendar event |
@@ -303,10 +357,15 @@ Tip: when you get stuck, ask the question this guide asks at every step: can I t
 | Mutation check | Breaking the code on purpose to prove a test notices |
 | PKCE | A one-time secret made per sign-in, so a stolen code is useless on its own |
 | Preload | A script that runs before the page and decides what the page may call |
+| Merchant key | A short, stable name for a shop or person, used to learn labels and spot duplicates |
 | Pure function | Gives the same output for the same input and changes nothing outside itself |
 | Renderer | Electron's web-page side: HTML, CSS, JS |
+| Refund pair | A payment and the credit that cancels it; neither counts as spending |
 | RRULE | The rule that makes a calendar event repeat, e.g. weekly until a date |
 | Spec | The design document: what to build and why |
+| Sen | A hundredth of a rupiah; the app stores every amount as whole sen |
+| Squash merge | Merging a branch as one commit, so its in-between commits never reach `master` |
 | Scope (OAuth) | What the app is allowed to touch in your Google account |
+| Schema version | A number in the database saying which tables it has, so older files can be upgraded |
 | TDD | Test-driven development: failing test, then code, then tidy |
 | Transaction | Several database changes that all happen or none do |
