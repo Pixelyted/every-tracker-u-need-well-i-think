@@ -229,7 +229,16 @@ function openEditQuest(quest) {
 
 function openQuestForm(quest, editingId, { addAnother = false } = {}) {
   const form = el('div', 'form');
-  const type = radioGroup('kind', [['main', 'Main quest'], ['side', 'Side quest'], ['limited', 'Limited event ⭐']], quest.kind);
+  // Events imported from the main Google calendar: always a single event, and
+  // they get an "Until" date instead of a repeat choice.
+  const imported = quest.origin === 'google';
+  const locked = imported && quest.googleLocked;
+  // Multi-day one-time quests (imported, or added by hand to ⚔ in Google)
+  // keep their "Until" date, so editing just the note can't shrink them.
+  const hasUntil = imported || (quest.repeat === 'once' && Boolean(quest.endDate));
+  const kinds = [['main', 'Main quest'], ['side', 'Side quest']];
+  if (!imported) kinds.push(['limited', 'Limited event ⭐']);
+  const type = radioGroup('kind', kinds, quest.kind);
   const name = textInput(quest.name, 'e.g. Potion Brewing 101 Midterm');
   const repeat = radioGroup('repeat', [['weekly', 'Every week'], ['once', 'Once']], quest.repeat || 'weekly');
   const weekday = selectInput(WEEKDAY_LABELS.map((l, i) => [i + 1, l]), quest.weekday || 1);
@@ -243,12 +252,15 @@ function openQuestForm(quest, editingId, { addAnother = false } = {}) {
   const endDate = dateInput(quest.endDate || localToday());
   const endTime = timeInput(quest.kind === 'limited' ? quest.end : '');
   const note = textInput(quest.note, 'optional, e.g. room 3.2');
+  const untilDate = dateInput(quest.endDate || quest.date || localToday());
   const errors = el('div', 'errors');
 
   const weeklyRow = field('Day', weekday);
   const onceRow = field('Date', onceDate);
   const regular = el('div', 'group');
-  regular.append(field('Repeats', repeat), weeklyRow, onceRow);
+  const repeatRow = field('Repeats', repeat);
+  const untilRow = field('Until', untilDate);
+  regular.append(repeatRow, weeklyRow, onceRow, untilRow);
   const timesRow = el('div', 'field');
   timesRow.append(el('span', 'field-label', 'Time'), start, el('span', 'dash', '–'), end);
   regular.append(timesRow);
@@ -262,6 +274,11 @@ function openQuestForm(quest, editingId, { addAnother = false } = {}) {
   limited.append(fromRow, toRow, el('div', 'field-hint', 'Every other quest on these days will be cancelled (still shown).'));
 
   form.append(field('Type', type), field('Name', name), regular, looks, limited, field('Note', note), errors);
+  if (locked) {
+    // Someone else owns the event, so Google would refuse these changes.
+    for (const input of [name, onceDate, untilDate, start, end]) input.disabled = true;
+    form.append(el('div', 'field-hint', 'Organised by someone else: change it in Google.'));
+  }
 
   // Show only the fields that fit the chosen type.
   function updateVisibility() {
@@ -272,6 +289,8 @@ function openQuestForm(quest, editingId, { addAnother = false } = {}) {
     looks.hidden = kind !== 'main';
     weeklyRow.hidden = repeat.value() !== 'weekly';
     onceRow.hidden = repeat.value() !== 'once';
+    repeatRow.hidden = imported;
+    untilRow.hidden = !hasUntil || repeat.value() !== 'once';
   }
   type.addEventListener('change', updateVisibility);
   repeat.addEventListener('change', updateVisibility);
@@ -289,11 +308,17 @@ function openQuestForm(quest, editingId, { addAnother = false } = {}) {
       q.color = colour.value();
       q.icon = icon.value();
     }
-    q.repeat = repeat.value();
+    q.repeat = imported ? 'once' : repeat.value();
     q.start = readTime(start);
     q.end = readTime(end);
     if (q.repeat === 'weekly') q.weekday = Number(weekday.value);
     else q.date = onceDate.value;
+    // Multi-day quests end on a later day; one-day ones have no end date.
+    if (hasUntil && q.repeat === 'once') q.endDate = untilDate.value === onceDate.value ? null : untilDate.value;
+    // origin, googleLocked and allDay are never sent: the db keeps them.
+    // One exception: an all-day quest given real times is no longer all-day
+    // (otherwise Google would still get it as a whole-day event).
+    if (quest.allDay && (q.start !== '00:00' || q.end !== '23:59')) q.allDay = false;
     return q;
   }
 
@@ -330,7 +355,13 @@ function describeOccurrence(occ) {
 
 async function confirmDelete(quest) {
   const what = quest.repeat === 'weekly' ? 'every week of this quest' : 'this quest';
-  const ok = await askDialog({ title: `Delete "${quest.name}"?`, lines: [`This removes ${what}.`], cancelLabel: 'Keep it', okLabel: 'Delete', okKind: 'btn-danger' });
+  const lines = [`This removes ${what}.`];
+  // Only a linked event we may change is deleted in Google too.
+  if (quest.origin === 'google') {
+    const alsoInGoogle = quest.googleLinked && !quest.googleLocked;
+    lines.push(alsoInGoogle ? 'It is also deleted from your Google Calendar.' : 'It stays in your Google Calendar.');
+  }
+  const ok = await askDialog({ title: `Delete "${quest.name}"?`, lines, cancelLabel: 'Keep it', okLabel: 'Delete', okKind: 'btn-danger' });
   if (ok) await window.dungeon.deleteQuest(quest.id);
 }
 
@@ -539,19 +570,24 @@ function checkbox(checked, label) {
   return wrap;
 }
 
-// One line describing the Google push, from getPushStatus():
-// { connected, enabled, authExpired, lastPush }.
+// The lines describing the Google sync, from getPushStatus():
+// { connected, enabled, authExpired, lastPush, needsWideScope, heldDeletes }.
+// Returns { text, warn }; the warnings come from the status itself, so they
+// disappear as soon as the cause is gone.
 function pushStatusText(status) {
   if (!status || !status.connected) return 'Not connected.';
   if (status.authExpired) return '⚠ Google disconnected: the sign-in expired. Click Reconnect.';
+  const lines = [];
   const last = status.lastPush;
-  if (!last) return 'Connected. Nothing pushed yet.';
-  if (last.ok) {
+  if (!last) lines.push('Connected. Nothing synced yet.');
+  else if (last.ok) {
     // `at` is stored in UTC; show it in the laptop's local time.
     const at = new Date(last.at);
-    return `Last pushed ${pad2(at.getHours())}.${pad2(at.getMinutes())}`;
-  }
-  return 'Push failed, will retry: ' + last.error;
+    lines.push(`Last synced ${pad2(at.getHours())}.${pad2(at.getMinutes())}`);
+  } else lines.push('Sync failed, will retry: ' + last.error);
+  if (status.needsWideScope) lines.push('⚠ Reconnect Google to allow your main calendar.');
+  if (status.heldDeletes) lines.push(`⚠ Google says ${status.heldDeletes} events were deleted. Nothing removed — check Google, then click Sync now to confirm.`);
+  return lines.join('\n');
 }
 
 // Reconnect after the sign-in expired (every 7 days while the Google app is
@@ -572,6 +608,17 @@ function googleSection(settings) {
   clientSecret.type = 'password';
   const status = el('div', 'field-hint push-status');
   const buttons = el('div', 'inline-buttons');
+  const mainSync = checkbox(settings.googleMainSync, 'Two-way with my main Google calendar');
+  const mainRow = el('div', 'field-block');
+  mainRow.append(mainSync, el('div', 'field-hint', 'Reads and edits events in your main calendar. Asks Google for permission again.'));
+  mainSync.input.addEventListener('change', async () => {
+    const result = await window.dungeon.setMainSync(mainSync.input.checked);
+    if (result && result.ok === false) {
+      // Nothing changed: put the tick back where it was, then say why.
+      mainSync.input.checked = !mainSync.input.checked;
+      status.textContent = 'Could not change this: ' + result.error;
+    } else redraw();
+  });
 
   function button(label, kind, onClick) {
     const b = el('button', 'btn' + (kind ? ' ' + kind : ''), label);
@@ -594,15 +641,17 @@ function googleSection(settings) {
   async function redraw() {
     const s = await window.dungeon.getPushStatus();
     status.textContent = pushStatusText(s);
-    status.classList.toggle('warn', Boolean(s.connected && (s.authExpired || (s.lastPush && !s.lastPush.ok))));
+    status.classList.toggle('warn', Boolean(s.connected && (s.authExpired || s.needsWideScope || s.heldDeletes || (s.lastPush && !s.lastPush.ok))));
+    mainSync.input.checked = Boolean(s.mainSync);
+    mainRow.hidden = !s.connected;
     buttons.replaceChildren();
     if (!s.connected) {
       buttons.append(button('Connect Google', 'btn-big', connect));
       return;
     }
-    if (s.authExpired) buttons.append(button('⟳ Reconnect Google', 'btn-big', connect));
-    buttons.append(button('Push now', '', async () => {
-      status.textContent = 'Pushing…';
+    if (s.authExpired || s.needsWideScope) buttons.append(button('⟳ Reconnect Google', 'btn-big', connect));
+    buttons.append(button('Sync now', '', async () => {
+      status.textContent = 'Syncing…';
       await window.dungeon.pushNow();
       redraw();
     }));
@@ -621,7 +670,7 @@ function googleSection(settings) {
   });
   box.append(
     el('div', 'field-hint', 'See docs/google-setup.md for how to get these.'),
-    field('Client ID', clientId), field('Secret', clientSecret), buttons, status,
+    field('Client ID', clientId), field('Secret', clientSecret), mainRow, buttons, status,
   );
   redraw();
   return box;
@@ -700,7 +749,7 @@ async function openSettings() {
     sectionTitle('Treasury'), treasuryRow, treasuryErrors, saveTreasury,
   );
   if (trayStatus && trayStatus.hint) body.append(el('div', 'field-hint tray-hint', trayStatus.hint));
-  body.append(sectionTitle('Google Calendar (one-way push)'), googleSection(settings));
+  body.append(sectionTitle('Google Calendar sync'), googleSection(settings));
   openModal({ title: '⚙ SETTINGS', content: body, buttons: [{ label: 'Close', onClick: (close) => close() }], wide: true });
 }
 

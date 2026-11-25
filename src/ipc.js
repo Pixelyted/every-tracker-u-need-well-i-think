@@ -40,6 +40,7 @@ const googleStubs = {
   googleConnect: async () => NOT_SET_UP,
   googleDisconnect: async () => NOT_SET_UP,
   pushNow: async () => NOT_SET_UP,
+  setMainSync: async () => NOT_SET_UP,
   getPushStatus: async () => NOT_SET_UP,
 };
 
@@ -152,8 +153,14 @@ function buildHandlers(store, { onChange = () => {}, clock, extra = {}, readPdfT
       const today = clock();
       return withCleared(expandDay(store.getWorld(), today.date), today);
     },
+    // googleLinked: the quest still has an event in the main Google
+    // calendar (an imported quest whose event became repeating has none),
+    // so the delete dialog can say truthfully what happens in Google.
     getQuest(id) {
-      return store.getWorld().quests.find((q) => q.id === id) || null;
+      const quest = store.getWorld().quests.find((q) => q.id === id);
+      if (!quest) return null;
+      const googleLinked = store.listMappings().some((m) => m.calendar === 'main' && m.localKey === 'quest:' + id);
+      return { ...quest, googleLinked };
     },
     // Both checks also say which warning dialogs to show, in order.
     checkDraft(draft, opts) {

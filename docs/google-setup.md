@@ -1,13 +1,12 @@
 # Connecting every tracker u need, well i think to Google Calendar
 
-The app can copy your quests into a Google calendar called
-**⚔ every tracker u need, well i think**, so Google reminds you on your phone even when the laptop is
-closed. The push only goes one way: from the app to Google. Make your edits
-in the app, because changes you make in Google are overwritten on the next
-push. The app can only see and change the calendars it created itself, never
-your other calendars. The ⚔ every tracker u need, well i think calendar belongs to the app: **don't
-add your own events to it**, because the next push removes anything the app
-didn't put there. Use your normal calendar for those.
+The app syncs with Google Calendar in two directions. It copies your quests
+into a Google calendar called **⚔ every tracker u need, well i think**, so
+Google reminds you on your phone even when the laptop is closed, and edits you
+make to those events in Google come back into the app (see "Two-way sync"
+below). By default the app can only see and change the calendars it created
+itself, never your other calendars. If you tick the main-calendar checkbox
+(see below), it can also read and change events on your main calendar.
 
 This takes about 10 minutes, once. You need a Google account and a browser.
 
@@ -39,14 +38,22 @@ This takes about 10 minutes, once. You need a Google account and a browser.
    Gmail address**. Only test users can sign in, which is exactly what you
    want.
 6. Under **Data access** (or **Scopes**), click **Add or remove scopes**,
-   find `.../auth/calendar.app.created` ("Make secondary Google calendars,
-   and see, create, change, and delete events on them"), tick it and save.
+   find these and tick them:
+   - `https://www.googleapis.com/auth/calendar.app.created` ("Make secondary
+     Google calendars, and see, create, change, and delete events on them").
+     Always needed.
+   - `https://www.googleapis.com/auth/calendar.events` ("See, create, change,
+     and delete events on all your calendars"). **Only needed for the
+     main-calendar checkbox** (see "Two-way sync" below). Optional: tick it
+     if you want that checkbox.
+
+   Then save.
 
 > **About Testing mode:** Google ends the sign-in of a Testing app after
 > **7 days**. When that happens, the app shows a desktop
 > notification, **"Google disconnected, reconnect in Settings"**, and a
 > red **⚠ Google disconnected · Reconnect** button on the main screen.
-> Click either one, sign in again, and the push picks up where it left off.
+> Click either one, sign in again, and the sync picks up where it left off.
 > Nothing in the app is lost while it's disconnected.
 
 ## 4. Create the client ID
@@ -59,14 +66,14 @@ This takes about 10 minutes, once. You need a Google account and a browser.
 
 ## 5. Connect the app
 
-1. In the app, open **⚙ Settings → Google Calendar**.
+1. In the app, open **⚙ Settings → Google Calendar sync**.
 2. Paste the **Client ID** and **Client secret**.
 3. Click **Connect Google**. Your browser opens Google's sign-in.
 4. Choose your account. Google warns **"Google hasn't verified this app"**.
    That's expected for your own personal app: click **Continue**.
 5. Allow access to the calendars the app creates. The browser shows
    **"⚔ Connected!"**. Close the tab.
-6. Settings now reads **Last pushed HH.MM**.
+6. Settings now shows the **Google Calendar sync** section and reads **Last synced HH.MM**.
 
 ## 6. On your phone
 
@@ -77,16 +84,56 @@ This takes about 10 minutes, once. You need a Google account and a browser.
    app already sets a reminder 15 minutes before each quest, plus 20.00 the
    evening before a boss quest or limited event.
 
+## 7. Two-way sync
+
+The **Sync now** button in Settings runs a sync by hand. A sync also runs when
+the app starts, after you change something, and every 30 minutes.
+
+**The ⚔ calendar** (always two-way). Edits you make to its events in Google
+come back:
+
+- Move one week of a weekly class and it becomes a make-up. Delete one week
+  and it becomes a skip.
+- Editing a whole repeating series in Google is not understood. The app resets
+  it to what the app says.
+- Edits and deletes of one-off quests and bounties are applied.
+- An event you add by hand becomes a side quest.
+
+**Your main calendar** (optional). Tick **Two-way with my main Google
+calendar** in Settings. It is off by default. Turning it on asks Google for the
+wider permission `calendar.events`, so the app sends you through the sign-in
+again. Without it, only the ⚔ calendar is two-way.
+
+- Upcoming events that don't repeat and that you haven't declined become side
+  quests tagged 📅. Repeating events are not imported.
+- Edits and deletes go both ways. If you delete an imported quest in the app,
+  the event is deleted in Google too. Invitations organised by someone else
+  are locked: the app can't change them, so deleting one only hides it in the
+  app.
+- Imported quests **never go into the ⚔ calendar**, so you don't get doubles.
+- If the same thing was edited on both sides, the newest edit wins.
+
+**Safety:**
+
+- If a sync would delete more than **5** quests because of deletions in
+  Google, it holds them back. Nothing is deleted until you click **Sync now**
+  within 10 minutes. This protects you from a mistake or a glitch wiping many
+  quests.
+- If the app can't read Google (no internet, an error), it changes nothing in
+  the app.
+- Turning the checkbox off, or disconnecting, keeps the quests already
+  imported.
+
 ## If something goes wrong
 
 | What you see | What to do |
 |--------------|------------|
 | `Error 403: access_denied` in the browser | Your email isn't a test user yet. Add it (step 3.5) and connect again. |
 | `Error 400: redirect_uri_mismatch` | The client type isn't **Desktop app**. Create a new Desktop client (step 4). |
-| Settings says **Push failed, will retry** | Usually no internet. The app tries again every 5 minutes and right after your next change. |
+| Settings says **Sync failed, will retry** | Usually no internet. The app tries again every 5 minutes and right after your next change. |
 | **Google disconnected** notification | The 7-day Testing sign-in ended. Click **Reconnect**. |
-| You deleted or edited an event in Google by mistake (even just one week of a weekly class) | The next push puts it back. The app pushes when it starts, after you change something in it, every 30 minutes by itself, and when you click **Push now** in Settings. |
+| You deleted or edited an event in Google by mistake (even just one week of a weekly class) | In the ⚔ calendar, a deleted or moved week turns into a skip or make-up (see step 7), so do those edits on purpose. The app syncs when it starts, after you change something in it, every 30 minutes by itself, and when you click **Sync now** in Settings. |
 
-**Disconnect** in Settings stops pushing and forgets the sign-in. The
+**Disconnect** in Settings stops syncing and forgets the sign-in. The
 ⚔ every tracker u need, well i think calendar stays in Google: delete it there if you don't want it
 any more.

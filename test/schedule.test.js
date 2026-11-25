@@ -162,3 +162,42 @@ test('a make-up disappears when its original class is no longer in the semester'
   world.semester.endDate = '2026-11-27'; // semester shortened: 11-30 is gone
   assert.deepEqual(expandDay(world, '2026-12-05'), []);
 });
+
+test('an overnight once quest shows on both days and cancels nothing', () => {
+  const world = makeWorld();
+  world.quests.push(quest({ id: 40, kind: 'side', repeat: 'once', name: 'Concert', date: '2026-11-30', endDate: '2026-12-01', start: '20:00', end: '02:00' }));
+  const first = expandDay(world, '2026-11-30');
+  assert.equal(byName(first, 'Concert').start, '20:00');
+  assert.equal(byName(first, 'Concert').end, '24:00');
+  assert.equal(byName(first, 'Potion Brewing 101').status, 'active');
+  const second = expandDay(world, '2026-12-01');
+  assert.equal(byName(second, 'Concert').start, '00:00');
+  assert.equal(byName(second, 'Concert').end, '02:00');
+  assert.deepEqual(occurrenceDates(world, world.quests[world.quests.length - 1]), ['2026-11-30', '2026-12-01']);
+});
+
+test('a multi-day once quest clashes like any quest', () => {
+  const world = makeWorld();
+  world.quests.push(quest({ id: 40, kind: 'side', repeat: 'once', name: 'Concert', date: '2026-11-30', endDate: '2026-12-01', start: '09:00', end: '10:00' }));
+  const day = expandDay(world, '2026-11-30');
+  assert.ok(byName(day, 'Concert').clashKeys.includes('q2@2026-11-30'));
+});
+
+test('endDate equal to date behaves as a normal once quest', () => {
+  const world = makeWorld();
+  const q = quest({ id: 40, kind: 'side', repeat: 'once', name: 'Concert', date: '2026-11-28', endDate: '2026-11-28', start: '08:00', end: '09:00' });
+  world.quests.push(q);
+  const occ = byName(expandDay(world, '2026-11-28'), 'Concert');
+  assert.equal(occ.start, '08:00');
+  assert.equal(occ.end, '09:00');
+  assert.equal('isLastDay' in occ, false);
+  assert.deepEqual(occurrenceDates(world, q), ['2026-11-28']);
+});
+
+test('a once quest ending at midnight has its last day on the start day', () => {
+  const world = makeWorld();
+  world.quests.push(quest({ id: 40, kind: 'side', repeat: 'once', name: 'Late', date: '2026-11-30', endDate: '2026-12-01', start: '22:00', end: '00:00' }));
+  const first = byName(expandDay(world, '2026-11-30'), 'Late');
+  assert.equal(first.isLastDay, true);
+  assert.equal(byName(expandDay(world, '2026-12-01'), 'Late'), undefined);
+});

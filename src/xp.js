@@ -64,6 +64,8 @@ function clearedAwards(world, fromDate, now) {
   for (const date of Object.keys(days).sort()) {
     for (const occ of days[date]) {
       if (occ.kind !== 'main' || occ.status !== 'active' || !isCleared(occ, now)) continue;
+      // A multi-day quest pays out once, on its last day.
+      if (occ.isLastDay === false) continue;
       const quest = world.quests.find((q) => q.id === occ.questId);
       const type = occ.isBoss ? 'boss' : 'main';
       rows.push({

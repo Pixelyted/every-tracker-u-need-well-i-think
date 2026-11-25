@@ -2,7 +2,7 @@
 
 21 November 2026
 
-The app (first called *Dungeon Planner*) was built in nine phases, and three more followed: write down what it must do, plan the work, then build it from the inside out (rules first, screen last), testing every piece before moving on. The same flow works for any app you build next.
+The app (first called *Dungeon Planner*) was built in nine phases, and four more followed: write down what it must do, plan the work, then build it from the inside out (rules first, screen last), testing every piece before moving on. The same flow works for any app you build next.
 
 ## The big picture
 
@@ -227,6 +227,8 @@ Two things that make the push safe to repeat:
 - Each push lists the events in the app's own calendar. An event you deleted in Google is recreated, and an event Google has that the app doesn't know about (a lost reply) is removed, so no duplicates.
 - One week of a weekly class deleted or edited in Google is a special case. Google keeps the series and stores that week as a separate "exception" linked to it, so the push replaces the whole series with a clean copy. Weeks the app leaves out on purpose (skips, breaks) don't count. Because the app also pushes by itself every 30 minutes, this happens without clicking anything.
 
+Phase 13 later turned this one-way push into a two-way sync, so edits made in Google are now kept instead of undone.
+
 ## Phase 9: Verify, review, fix, ship
 
 Passing tests weren't treated as "done". The last phase checked the app the way you'd use it, then had someone with fresh eyes read all of it.
@@ -294,6 +296,37 @@ Making a repo public means everything in it, including its history, can be read 
 3. **Drop the history:** copy the clean files into a new folder and make one fresh commit there. That became the public repo; the private one stays as the archive. Rewriting history in place was the other option, but it can't be undone.
 4. **Rename the app** to "every tracker u need, well i think". Only the visible name changed: file and folder names stay `dungeon-planner`, because Electron finds its data folder from them, so a full rename would have hidden every existing user's data.
 
+## Phase 13: Two-way Google sync
+
+Until now Google was only a copy: edits made in Google were ignored or undone, and an event you added to the ⚔ calendar yourself was even deleted as a "leftover". The reason to change that was a real habit: away from the laptop, a friend mentions an extra class or a concert, and the quickest place to note it is Google Calendar on the phone. Spec: [`docs/superpowers/specs/2026-11-26-two-way-google-sync-design.md`](superpowers/specs/2026-11-26-two-way-google-sync-design.md), plan next to it in `plans/`.
+
+What it does now:
+
+- **⚔ calendar, both ways.** Moving one week of a class in Google becomes a make-up; deleting one week becomes a skip. Edits to one-time quests and bounties come back. Events you add there become side quests. The weekly plan itself (the whole series) is still only edited in the app.
+- **Main calendar, both ways** (a Settings checkbox, off by default). Upcoming one-off events become 📅 side quests. Editing or deleting on either side changes the other. This needs a wider permission, `calendar.events`, on top of `calendar.app.created`.
+- **Trips and overnight events** became a new kind of one-time quest with an end date, which never cancels anything (a limited event cancels every quest on its days).
+
+**How changes are found.** Each sync lists every event and compares Google's `updated` stamp, and the app item's own `updated_at`, with the ones saved on the mapping at the last sync. If only one side moved, that side wins; if both moved, the newer one wins. Google also offers "sync tokens" (only what changed since last time), but they expire and can't be combined with "upcoming only". For one person's calendar, listing everything every 30 minutes costs almost nothing, and the simpler code is easier to trust.
+
+The new layers follow the old rule, decisions in pure functions:
+
+| File | Job | Pure? |
+| --- | --- | --- |
+| `src/google/event-time.js` | Google times ⇄ Jakarta date and time; strips the app's own "⚠" and "📜 … (due …)" from titles | yes |
+| `src/google/pull.js` | listed events + mappings + app data → a list of actions (`updateQuest`, `setChange`, `resend`, `unlink`…) | yes |
+| `src/google/sync.js` | one run: list, plan, safety checks, apply, push ⚔, patch the main calendar | no |
+
+Because `pull.js` only *returns* actions, every row of the spec's "what each Google change does" table is one small test, with no fake Google needed.
+
+**Safety rules**, each one there because of a way it could hurt a real calendar:
+
+- The app only changes or deletes Google events it has a mapping for. Main-calendar writes are `patch` with four fields, so guests, links and your own reminders are never touched.
+- A failed read stops the sync before anything in the app changes. "I couldn't see it" is not "it was deleted".
+- More than 5 deletions from Google in one run are held until you click Sync now.
+- One event Google refuses to change (a Gmail flight booking, say) is skipped instead of failing every sync after it.
+
+This was built the Phase 10 way, with a fresh builder and a fresh reviewer for each of the 10 tasks, then one review of the whole branch. The reviews earned their cost: they found a weekly class that could show twice forever, a re-created ⚔ calendar that would import every main-calendar event a second time, a multi-day quest that shrank to one day when you edited its note, and a refused delete that quietly came back. Each fix came with a test that failed first. The feature ended at 350 tests.
+
 ## Lessons worth keeping
 
 Every bug below was real, and each one teaches something you'll meet again.
@@ -315,6 +348,9 @@ Every bug below was real, and each one teaches something you'll meet again.
 | The balance chart looked flat | Bars were scaled from 0, and balances differ by little compared with their size | Scale a chart between its lowest and highest value |
 | A new box put a border around a whole column | Its CSS class name was already used by the column | Search for a class name before you reuse one |
 | Git history still held real data after the files were cleaned | History keeps every old version of every file | Before going public, start fresh history or rewrite it |
+| Times were off by hours on another computer | `new Date('2026-11-30T20:00:00')` reads a time with no offset in the *computer's* zone | Run time tests with another zone too: `TZ=America/New_York npm test` |
+| A re-created calendar would have imported everything twice | Clearing "all mappings" also cleared the main calendar's, which lived in the same table | When a table starts holding two kinds of thing, check every "delete all" on it |
+| A sync could have kept "changing" things forever | Our own push changes Google's `updated` stamp, which the next pull reads as an edit in Google | After every write, save the answer's stamp: an echo is not a change |
 
 The pattern in most of them: the code was fine, but the test or the check was wrong. Making each check fail once on purpose is what caught them.
 
@@ -333,6 +369,7 @@ Work through these in order. Each one uses the real code in your repo and ends w
 - [ ] **Study a real fix.** Run `git show 74a88cd` (the six leftover fixes). For each one, find the test that was written first, then the lines that made it pass. Undo one fix by hand and watch its test fail.
 - [ ] **Read a bank row.** Open `test/bca-fixture.js`, pick one made-up row, and trace it through `parseMutasi` in `src/bca-parse.js` and `merchantKey` in `src/merchant.js` by hand. Check your answer with a small test.
 - [ ] **Count, don't compare.** Read `newRows` in `src/finance.js`, then write a test with two identical charges in the database and three in a file. How many get added?
+- [ ] **Plan a pull by hand.** In `test/pull.test.js`, pick the test where one week is moved in Google. Before reading its expected actions, write down what `planPull` should return, then compare.
 - [ ] **A small feature, the full way.** Write a half-page spec for "export this week as text", then a plan with the function names, then build it test-first on a new branch.
 
 Tip: when you get stuck, ask the question this guide asks at every step: can I test this piece without the screen?
@@ -357,11 +394,14 @@ Tip: when you get stuck, ask the question this guide asks at every step: can I t
 | Mutation check | Breaking the code on purpose to prove a test notices |
 | PKCE | A one-time secret made per sign-in, so a stolen code is useless on its own |
 | Preload | A script that runs before the page and decides what the page may call |
+| Mapping | One row linking an app item to its Google event, with the stamps from the last sync |
 | Merchant key | A short, stable name for a shop or person, used to learn labels and spot duplicates |
+| Newest edit wins | When both sides changed since the last sync, the later change is kept |
 | Pure function | Gives the same output for the same input and changes nothing outside itself |
 | Renderer | Electron's web-page side: HTML, CSS, JS |
 | Refund pair | A payment and the credit that cancels it; neither counts as spending |
 | RRULE | The rule that makes a calendar event repeat, e.g. weekly until a date |
+| Sync token | Google's bookmark for "only what changed since last time" (not used here) |
 | Spec | The design document: what to build and why |
 | Sen | A hundredth of a rupiah; the app stores every amount as whole sen |
 | Squash merge | Merging a branch as one commit, so its in-between commits never reach `master` |

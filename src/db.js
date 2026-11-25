@@ -14,7 +14,8 @@ const { mondayOf } = require('./time');
 // 2: the deadlines table was added (existing databases just gain it).
 // 3: habits, the XP log and the xp columns were added.
 // 4: imports, transactions and merchant labels (finances) were added.
-const SCHEMA_VERSION = 4;
+// 5: two-way Google sync (updated_at, quest origin, mapping stamps, hidden events).
+const SCHEMA_VERSION = 5;
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS semesters (
@@ -39,7 +40,11 @@ const SCHEMA = `
     start_date TEXT,               -- limited only
     end_date TEXT,
     semester_id INTEGER REFERENCES semesters(id),
-    xp INTEGER                     -- NULL = the default amount
+    xp INTEGER,                    -- NULL = the default amount
+    updated_at TEXT,               -- ISO time of the last local write
+    origin TEXT,                   -- NULL | 'google' (imported from the main calendar)
+    google_locked INTEGER NOT NULL DEFAULT 0,
+    all_day INTEGER NOT NULL DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS changes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +54,7 @@ const SCHEMA = `
     new_date TEXT,
     new_start TEXT,
     new_end TEXT,
+    updated_at TEXT,
     UNIQUE (quest_id, original_date)
   );
   CREATE TABLE IF NOT EXISTS breaks (
@@ -69,13 +75,20 @@ const SCHEMA = `
     due_time TEXT NOT NULL,        -- 'HH:MM'
     note TEXT,
     done INTEGER NOT NULL DEFAULT 0,
-    xp INTEGER                     -- NULL = the default amount
+    xp INTEGER,                    -- NULL = the default amount
+    updated_at TEXT
   );
   CREATE TABLE IF NOT EXISTS mappings (
     local_key TEXT PRIMARY KEY,    -- 'quest:<id>', 'makeup:<changeId>' or 'deadline:<id>'
     google_id TEXT NOT NULL,
     hash TEXT,
-    frozen INTEGER NOT NULL DEFAULT 0
+    frozen INTEGER NOT NULL DEFAULT 0,
+    calendar TEXT NOT NULL DEFAULT 'app',   -- 'app' | 'main'
+    google_updated TEXT,
+    local_updated TEXT
+  );
+  CREATE TABLE IF NOT EXISTS hidden_google_events (
+    google_id TEXT PRIMARY KEY     -- imported events the user deleted here
   );
   CREATE TABLE IF NOT EXISTS habits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,6 +153,7 @@ const DEFAULT_SETTINGS = {
   desktopNotifications: true,
   launchOnLogin: true,
   googlePush: false,
+  googleMainSync: false,     // also read and change the main calendar
   googleCalendarId: null,
   googleClientId: '',
   googleClientSecret: '',
@@ -173,6 +187,10 @@ function rowToQuest(row) {
     endDate: row.end_date,
     semesterId: row.semester_id,
     xp: row.xp,
+    updatedAt: row.updated_at,
+    origin: row.origin,
+    googleLocked: row.google_locked === 1,
+    allDay: row.all_day === 1,
   };
 }
 
@@ -185,6 +203,7 @@ function rowToChange(row) {
     newDate: row.new_date,
     newStart: row.new_start,
     newEnd: row.new_end,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -194,11 +213,16 @@ function rowToBreak(row) {
 
 // SQLite has no true/false, so `done` is stored as 0 or 1.
 function rowToDeadline(row) {
-  return { id: row.id, name: row.name, dueDate: row.due_date, dueTime: row.due_time, note: row.note, done: row.done === 1, xp: row.xp };
+  return { id: row.id, name: row.name, dueDate: row.due_date, dueTime: row.due_time, note: row.note, done: row.done === 1, xp: row.xp, updatedAt: row.updated_at };
 }
 
 function rowToMapping(row) {
-  return { localKey: row.local_key, googleId: row.google_id, hash: row.hash, frozen: row.frozen };
+  return { localKey: row.local_key, googleId: row.google_id, hash: row.hash,
+    frozen: row.frozen,
+    calendar: row.calendar,
+    googleUpdated: row.google_updated,
+    localUpdated: row.local_updated,
+  };
 }
 
 function rowToXp(row) {
@@ -255,6 +279,16 @@ function openStore(filePath) {
   // made before version 3 need the new columns added by hand.
   addColumnIfMissing('quests', 'xp', 'INTEGER');
   addColumnIfMissing('deadlines', 'xp', 'INTEGER');
+  // Version 5 columns.
+  addColumnIfMissing('quests', 'updated_at', 'TEXT');
+  addColumnIfMissing('quests', 'origin', 'TEXT');
+  addColumnIfMissing('quests', 'google_locked', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('quests', 'all_day', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('deadlines', 'updated_at', 'TEXT');
+  addColumnIfMissing('changes', 'updated_at', 'TEXT');
+  addColumnIfMissing('mappings', 'calendar', "TEXT NOT NULL DEFAULT 'app'");
+  addColumnIfMissing('mappings', 'google_updated', 'TEXT');
+  addColumnIfMissing('mappings', 'local_updated', 'TEXT');
   db.exec('PRAGMA user_version = ' + SCHEMA_VERSION);
 
   function addColumnIfMissing(table, column, type) {
@@ -360,18 +394,24 @@ function openStore(filePath) {
         orNull(quest.weekday), orNull(quest.date), orNull(quest.start), orNull(quest.end),
         orNull(quest.startDate), orNull(quest.endDate), semesterId,
       ];
+      const now = new Date().toISOString();
       let id = quest.id;
       if (id) {
         db.prepare(`UPDATE quests SET kind = ?, repeat = ?, name = ?, color = ?, icon = ?, note = ?, weekday = ?,
-          date = ?, start_time = ?, end_time = ?, start_date = ?, end_date = ?, semester_id = ? WHERE id = ?`)
-          .run(...values, id);
+          date = ?, start_time = ?, end_time = ?, start_date = ?, end_date = ?, semester_id = ?, updated_at = ? WHERE id = ?`)
+          .run(...values, now, id);
         // Forms don't know about xp, so an edit without one keeps the stored
         // value. An explicit null clears it back to the default.
         if (quest.xp !== undefined) db.prepare('UPDATE quests SET xp = ? WHERE id = ?').run(quest.xp, id);
+        // Same rule for the Google fields: the forms don't send them.
+        if (quest.origin !== undefined) db.prepare('UPDATE quests SET origin = ? WHERE id = ?').run(quest.origin, id);
+        if (quest.googleLocked !== undefined) db.prepare('UPDATE quests SET google_locked = ? WHERE id = ?').run(quest.googleLocked ? 1 : 0, id);
+        if (quest.allDay !== undefined) db.prepare('UPDATE quests SET all_day = ? WHERE id = ?').run(quest.allDay ? 1 : 0, id);
       } else {
         const info = db.prepare(`INSERT INTO quests (kind, repeat, name, color, icon, note, weekday, date,
-          start_time, end_time, start_date, end_date, semester_id, xp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-          .run(...values, orNull(quest.xp));
+          start_time, end_time, start_date, end_date, semester_id, updated_at, xp, origin, google_locked, all_day)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(...values, now, orNull(quest.xp), orNull(quest.origin), quest.googleLocked ? 1 : 0, quest.allDay ? 1 : 0);
         id = Number(info.lastInsertRowid);
       }
       dropChangesThatNoLongerFit(id, quest);
@@ -388,22 +428,50 @@ function openStore(filePath) {
     }
   }
 
+  function getQuest(id) {
+    const row = db.prepare('SELECT * FROM quests WHERE id = ?').get(id);
+    return row ? rowToQuest(row) : null;
+  }
+
+  // Deleting an imported, locked quest must not bring it back on the next
+  // sync, so its Google event goes on the hidden list in the same transaction.
   function deleteQuest(id) {
-    // ON DELETE CASCADE removes the quest's changes too.
-    db.prepare('DELETE FROM quests WHERE id = ?').run(id);
+    inTransaction(() => {
+      const quest = getQuest(id);
+      if (quest && quest.origin === 'google' && quest.googleLocked) {
+        const mapping = db.prepare('SELECT google_id FROM mappings WHERE local_key = ?').get('quest:' + id);
+        if (mapping) hideGoogleEvent(mapping.google_id);
+      }
+      // ON DELETE CASCADE removes the quest's changes too.
+      db.prepare('DELETE FROM quests WHERE id = ?').run(id);
+    });
+  }
+
+  function hideGoogleEvent(googleId) {
+    db.prepare('INSERT INTO hidden_google_events (google_id) VALUES (?) ON CONFLICT (google_id) DO NOTHING').run(googleId);
+  }
+
+  function listHiddenGoogleEvents() {
+    return db.prepare('SELECT google_id FROM hidden_google_events ORDER BY google_id').all().map((r) => r.google_id);
   }
 
   // One skip or move per (quest, original date): setting a new one replaces
   // the old one but keeps its id, so its Google make-up mapping stays valid.
   function setChange(change) {
-    db.prepare(`INSERT INTO changes (quest_id, original_date, action, new_date, new_start, new_end)
-      VALUES (?, ?, ?, ?, ?, ?)
+    db.prepare(`INSERT INTO changes (quest_id, original_date, action, new_date, new_start, new_end, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (quest_id, original_date) DO UPDATE SET
         action = excluded.action, new_date = excluded.new_date,
-        new_start = excluded.new_start, new_end = excluded.new_end`)
-      .run(change.questId, change.originalDate, change.action, orNull(change.newDate), orNull(change.newStart), orNull(change.newEnd));
+        new_start = excluded.new_start, new_end = excluded.new_end, updated_at = excluded.updated_at`)
+      .run(change.questId, change.originalDate, change.action, orNull(change.newDate), orNull(change.newStart), orNull(change.newEnd),
+        new Date().toISOString());
     const row = db.prepare('SELECT id FROM changes WHERE quest_id = ? AND original_date = ?').get(change.questId, change.originalDate);
     return row.id;
+  }
+
+  function getChange(id) {
+    const row = db.prepare('SELECT * FROM changes WHERE id = ?').get(id);
+    return row ? rowToChange(row) : null;
   }
 
   function removeChange(questId, originalDate) {
@@ -435,20 +503,26 @@ function openStore(filePath) {
   // Inserts a deadline (no id) or updates one. Editing never changes
   // whether it is ticked done: that's setDeadlineDone's job.
   function saveDeadline(d) {
+    const now = new Date().toISOString();
     if (d.id) {
-      db.prepare('UPDATE deadlines SET name = ?, due_date = ?, due_time = ?, note = ? WHERE id = ?')
-        .run(d.name, d.dueDate, d.dueTime, orNull(d.note), d.id);
+      db.prepare('UPDATE deadlines SET name = ?, due_date = ?, due_time = ?, note = ?, updated_at = ? WHERE id = ?')
+        .run(d.name, d.dueDate, d.dueTime, orNull(d.note), now, d.id);
       // Same rule as quests: an edit without xp keeps it, null clears it.
       if (d.xp !== undefined) db.prepare('UPDATE deadlines SET xp = ? WHERE id = ?').run(d.xp, d.id);
       return d.id;
     }
-    const info = db.prepare('INSERT INTO deadlines (name, due_date, due_time, note, xp) VALUES (?, ?, ?, ?, ?)')
-      .run(d.name, d.dueDate, d.dueTime, orNull(d.note), orNull(d.xp));
+    const info = db.prepare('INSERT INTO deadlines (name, due_date, due_time, note, xp, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(d.name, d.dueDate, d.dueTime, orNull(d.note), orNull(d.xp), now);
     return Number(info.lastInsertRowid);
   }
 
   function setDeadlineDone(id, done) {
-    db.prepare('UPDATE deadlines SET done = ? WHERE id = ?').run(done ? 1 : 0, id);
+    db.prepare('UPDATE deadlines SET done = ?, updated_at = ? WHERE id = ?').run(done ? 1 : 0, new Date().toISOString(), id);
+  }
+
+  function getDeadline(id) {
+    const row = db.prepare('SELECT * FROM deadlines WHERE id = ?').get(id);
+    return row ? rowToDeadline(row) : null;
   }
 
   function deleteDeadline(id) {
@@ -556,19 +630,24 @@ function openStore(filePath) {
     return db.prepare('SELECT * FROM mappings ORDER BY local_key').all().map(rowToMapping);
   }
 
-  function upsertMapping({ localKey, googleId, hash, frozen = 0 }) {
-    db.prepare(`INSERT INTO mappings (local_key, google_id, hash, frozen) VALUES (?, ?, ?, ?)
-      ON CONFLICT (local_key) DO UPDATE SET google_id = excluded.google_id, hash = excluded.hash, frozen = excluded.frozen`)
-      .run(localKey, googleId, orNull(hash), frozen ? 1 : 0);
+  function upsertMapping({ localKey, googleId, hash, frozen = 0, calendar = 'app', googleUpdated = null, localUpdated = null }) {
+    db.prepare(`INSERT INTO mappings (local_key, google_id, hash, frozen, calendar, google_updated, local_updated)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (local_key) DO UPDATE SET google_id = excluded.google_id, hash = excluded.hash, frozen = excluded.frozen,
+        calendar = excluded.calendar, google_updated = excluded.google_updated, local_updated = excluded.local_updated`)
+      .run(localKey, googleId, orNull(hash), frozen ? 1 : 0, calendar, googleUpdated, localUpdated);
   }
 
   function deleteMapping(localKey) {
     db.prepare('DELETE FROM mappings WHERE local_key = ?').run(localKey);
   }
 
-  function clearMappings({ includeFrozen = false } = {}) {
-    if (includeFrozen) db.prepare('DELETE FROM mappings').run();
-    else db.prepare('DELETE FROM mappings WHERE frozen = 0').run();
+  // `calendar` ('app' or 'main') limits it to one calendar's mappings;
+  // left out, every calendar's mappings go.
+  function clearMappings({ includeFrozen = false, calendar = null } = {}) {
+    const frozenRule = includeFrozen ? '1 = 1' : 'frozen = 0';
+    if (calendar) db.prepare('DELETE FROM mappings WHERE ' + frozenRule + ' AND calendar = ?').run(calendar);
+    else db.prepare('DELETE FROM mappings WHERE ' + frozenRule).run();
   }
 
   // ---------- finances ----------
@@ -642,14 +721,14 @@ function openStore(filePath) {
 
   return {
     getWorld, getActiveSemester, saveSemester, startNewSemester,
-    saveQuest, deleteQuest, setChange, removeChange,
+    saveQuest, getQuest, deleteQuest, setChange, getChange, removeChange,
     saveBreak, deleteBreak, getSettings, setSettings,
-    listDeadlines, saveDeadline, setDeadlineDone, deleteDeadline,
+    listDeadlines, getDeadline, saveDeadline, setDeadlineDone, deleteDeadline,
     listHabits, saveHabit, deleteHabit, setHabitTick,
     addXp, removeXp, listXp, totalXp,
     addImport, listTransactions, setKinds, setTransactionLabel, setTransactionAllowance,
     listMerchantLabels, setMerchantLabel, listImports, deleteImport,
-    listMappings, upsertMapping, deleteMapping, clearMappings, close,
+    listMappings, upsertMapping, listHiddenGoogleEvents, hideGoogleEvent, deleteMapping, clearMappings, close,
   };
 }
 

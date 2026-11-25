@@ -17,7 +17,12 @@ const path = require('node:path');
 
 // The narrowest scope: the app may only see and change calendars it created
 // itself (the "⚔ every tracker u need, well i think" calendar), never your other calendars.
-const SCOPE = 'https://www.googleapis.com/auth/calendar.app.created';
+const SCOPES = {
+  app: 'https://www.googleapis.com/auth/calendar.app.created',
+  // Only asked for when the user turns on syncing with their main calendar.
+  events: 'https://www.googleapis.com/auth/calendar.events',
+};
+const SCOPE = SCOPES.app;
 const SIGN_IN_TIMEOUT_MS = 5 * 60 * 1000;
 
 const DONE_PAGE = `<!doctype html><meta charset="utf-8"><title>every tracker u need, well i think</title>
@@ -89,7 +94,7 @@ function createAuth({ tokenFile, safeStorage, getCredentials, OAuth2Client = req
 
   // ---------- public ----------
 
-  async function connect({ openExternal }) {
+  async function connect({ openExternal, wide = false }) {
     const { clientId, clientSecret } = getCredentials();
     if (!clientId || !clientSecret) throw new Error('Enter the client ID and secret first');
 
@@ -102,7 +107,8 @@ function createAuth({ tokenFile, safeStorage, getCredentials, OAuth2Client = req
       const url = client.generateAuthUrl({
         access_type: 'offline', // gives a refresh token, so we stay signed in
         prompt: 'consent', // always ask, so Google always sends a refresh token
-        scope: [SCOPE],
+        scope: wide ? [SCOPES.app, SCOPES.events] : [SCOPES.app],
+        include_granted_scopes: true, // keep what was allowed before
         state,
         code_challenge: codeChallenge,
         code_challenge_method: 'S256',
@@ -157,12 +163,23 @@ function createAuth({ tokenFile, safeStorage, getCredentials, OAuth2Client = req
     return fs.existsSync(tokenFile);
   }
 
+  // True when the saved sign-in was allowed to edit the main calendar.
+  // Google lists what it granted in the tokens' `scope` text.
+  function hasWideScope() {
+    try {
+      const tokens = loadTokens();
+      return Boolean(tokens && typeof tokens.scope === 'string' && tokens.scope.split(' ').includes(SCOPES.events));
+    } catch (err) {
+      return false; // unreadable sign-in: treat as not allowed
+    }
+  }
+
   // Forgets the sign-in. The "⚔ every tracker u need, well i think" calendar stays in Google.
   function disconnect() {
     fs.rmSync(tokenFile, { force: true });
   }
 
-  return { connect, getClient, isConnected, disconnect };
+  return { connect, getClient, isConnected, hasWideScope, disconnect };
 }
 
-module.exports = { createAuth, SCOPE };
+module.exports = { createAuth, SCOPE, SCOPES };

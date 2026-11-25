@@ -20,9 +20,24 @@ function seededStore() {
   return store;
 }
 
+function withoutUpdatedAt(d) {
+  const { updatedAt, ...rest } = d;
+  return rest;
+}
+
+function withoutSyncFields(q) {
+  const { updatedAt, origin, googleLocked, allDay, ...rest } = q;
+  return rest;
+}
+
 test('round-trips the fixture world', () => {
   const store = seededStore();
-  assert.deepEqual(store.getWorld(), makeWorld());
+  // The store adds sync fields the fixture doesn't know about; check the rest.
+  const world = store.getWorld();
+  const expected = makeWorld();
+  assert.deepEqual(world.quests.map(withoutSyncFields), expected.quests);
+  assert.ok(world.quests.every((q) => q.origin === null && q.googleLocked === false && q.allDay === false && q.updatedAt));
+  assert.deepEqual({ ...world, quests: expected.quests }, expected);
   assert.deepEqual(store.getActiveSemester(), makeWorld().semester);
 });
 
@@ -81,6 +96,17 @@ test('startNewSemester archives old weekly quests and freezes their mappings', (
   assert.deepEqual(store.listMappings(), []);
 });
 
+test('clearMappings can keep the other calendar\'s mappings', () => {
+  const store = seededStore();
+  store.upsertMapping({ localKey: 'quest:1', googleId: 'g1', hash: 'h1' });
+  store.upsertMapping({ localKey: 'quest:2', googleId: 'g2', hash: 'h2', frozen: 1 });
+  store.upsertMapping({ localKey: 'quest:3', googleId: 'g3', hash: 'h3', calendar: 'main' });
+  store.clearMappings({ calendar: 'app' });
+  assert.deepEqual(store.listMappings().map((m) => m.localKey), ['quest:2', 'quest:3']);
+  store.clearMappings({ calendar: 'app', includeFrozen: true });
+  assert.deepEqual(store.listMappings().map((m) => m.localKey), ['quest:3']);
+});
+
 test('breaks belong to the active semester', () => {
   const store = seededStore();
   const id = store.saveBreak({ name: 'Midterm week', startDate: '2026-10-12', endDate: '2026-10-16' });
@@ -104,7 +130,7 @@ test('mappings upsert and delete', () => {
   const store = openStore(':memory:');
   store.upsertMapping({ localKey: 'quest:1', googleId: 'g1', hash: 'h1' });
   store.upsertMapping({ localKey: 'quest:1', googleId: 'g1', hash: 'h2' });
-  assert.deepEqual(store.listMappings(), [{ localKey: 'quest:1', googleId: 'g1', hash: 'h2', frozen: 0 }]);
+  assert.deepEqual(store.listMappings(), [{ localKey: 'quest:1', googleId: 'g1', hash: 'h2', frozen: 0, calendar: 'app', googleUpdated: null, localUpdated: null }]);
   store.deleteMapping('quest:1');
   assert.deepEqual(store.listMappings(), []);
 });
@@ -112,10 +138,10 @@ test('mappings upsert and delete', () => {
 test('deadlines: save, update, tick done, delete', () => {
   const store = openStore(':memory:');
   const id = store.saveDeadline({ name: 'Calc HW', dueDate: '2026-11-27', dueTime: '23:59' });
-  assert.deepEqual(store.listDeadlines(), [{ id, name: 'Calc HW', dueDate: '2026-11-27', dueTime: '23:59', note: null, done: false, xp: null }]);
+  assert.deepEqual(store.listDeadlines().map(withoutUpdatedAt), [{ id, name: 'Calc HW', dueDate: '2026-11-27', dueTime: '23:59', note: null, done: false, xp: null }]);
   store.saveDeadline({ id, name: 'Calc HW 3', dueDate: '2026-11-28', dueTime: '12:00', note: 'page 40' });
   store.setDeadlineDone(id, true);
-  assert.deepEqual(store.listDeadlines(), [{ id, name: 'Calc HW 3', dueDate: '2026-11-28', dueTime: '12:00', note: 'page 40', done: true, xp: null }]);
+  assert.deepEqual(store.listDeadlines().map(withoutUpdatedAt), [{ id, name: 'Calc HW 3', dueDate: '2026-11-28', dueTime: '12:00', note: 'page 40', done: true, xp: null }]);
   // Editing a ticked deadline keeps it ticked.
   store.saveDeadline({ id, name: 'Calc HW 3', dueDate: '2026-11-28', dueTime: '12:00' });
   assert.equal(store.listDeadlines()[0].done, true);
@@ -295,7 +321,112 @@ test('finance: a version-3 database gains the new tables', () => {
   assert.deepEqual(store.listTransactions(), []);
   store.close();
   const check = new DatabaseSync(file);
-  assert.equal(check.prepare('PRAGMA user_version').get().user_version, 4);
+  assert.equal(check.prepare('PRAGMA user_version').get().user_version, 5);
   check.close();
   fs.rmSync(dir, { recursive: true });
+});
+
+// ---------- version 5: two-way Google sync ----------
+
+test('v5: an old v4 database gains the new columns and keeps its rows', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dp-v5-'));
+  const file = path.join(dir, 'old.db');
+  const old = new DatabaseSync(file);
+  old.exec(`
+    CREATE TABLE quests (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, repeat TEXT, name TEXT NOT NULL,
+      color TEXT, icon TEXT, note TEXT, weekday INTEGER, date TEXT, start_time TEXT, end_time TEXT,
+      start_date TEXT, end_date TEXT, semester_id INTEGER, xp INTEGER);
+    CREATE TABLE mappings (local_key TEXT PRIMARY KEY, google_id TEXT NOT NULL, hash TEXT, frozen INTEGER NOT NULL DEFAULT 0);
+    INSERT INTO quests (kind, repeat, name, date, start_time, end_time) VALUES ('side', 'once', 'Old', '2026-11-23', '05:00', '19:00');
+    INSERT INTO mappings (local_key, google_id, hash) VALUES ('quest:1', 'g1', 'h1');
+    PRAGMA user_version = 4;
+  `);
+  old.close();
+  const store = openStore(file);
+  const q = store.getQuest(1);
+  assert.equal(q.name, 'Old');
+  assert.equal(q.origin, null);
+  assert.equal(q.googleLocked, false);
+  assert.equal(q.allDay, false);
+  assert.equal(q.updatedAt, null);
+  const m = store.listMappings()[0];
+  assert.equal(m.googleId, 'g1');
+  assert.equal(m.calendar, 'app');
+  assert.equal(m.googleUpdated, null);
+  assert.equal(m.localUpdated, null);
+  store.close();
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('saveQuest stamps updatedAt and keeps origin when not given', () => {
+  const store = openStore(':memory:');
+  const { id: _ignored, ...base } = seminar;
+  const id = store.saveQuest({ ...base, origin: 'google', googleLocked: true });
+  const first = store.getQuest(id);
+  assert.equal(first.origin, 'google');
+  assert.equal(first.googleLocked, true);
+  assert.ok(!Number.isNaN(Date.parse(first.updatedAt)));
+  store.saveQuest({ ...base, id, name: 'Seminar 2' });
+  const second = store.getQuest(id);
+  assert.equal(second.origin, 'google');
+  assert.equal(second.googleLocked, true);
+  assert.ok(second.updatedAt >= first.updatedAt);
+  assert.equal(store.getQuest(999), null);
+});
+
+test('saveQuest keeps allDay when not given and changes it when given', () => {
+  const store = openStore(':memory:');
+  const { id: _ignored, ...base } = seminar;
+  const id = store.saveQuest({ ...base, start: '00:00', end: '23:59', allDay: true });
+  store.saveQuest({ ...base, id, start: '00:00', end: '23:59', name: 'Renamed' });
+  assert.equal(store.getQuest(id).allDay, true);
+  store.saveQuest({ ...base, id, start: '09:00', end: '10:00', allDay: false });
+  assert.equal(store.getQuest(id).allDay, false);
+});
+
+test('a once quest keeps its endDate', () => {
+  const store = openStore(':memory:');
+  const { id: _ignored, ...base } = seminar;
+  store.saveQuest({ ...base, date: '2026-12-05', endDate: '2026-12-06' });
+  assert.equal(store.getWorld().quests[0].endDate, '2026-12-06');
+});
+
+test('setChange and saveDeadline stamp updatedAt', () => {
+  const store = seededStore();
+  const changeId = store.setChange({ questId: 1, originalDate: '2026-11-30', action: 'skip' });
+  assert.ok(!Number.isNaN(Date.parse(store.getChange(changeId).updatedAt)));
+  assert.equal(store.getChange(999), null);
+  const id = store.saveDeadline({ name: 'HW', dueDate: '2026-11-27', dueTime: '23:59' });
+  assert.ok(!Number.isNaN(Date.parse(store.getDeadline(id).updatedAt)));
+  assert.equal(store.getDeadline(999), null);
+  // Ticking done counts as a change too.
+  const before = store.getDeadline(id).updatedAt;
+  store.setDeadlineDone(id, true);
+  assert.ok(store.getDeadline(id).updatedAt >= before);
+});
+
+test('upsertMapping stores calendar and stamps', () => {
+  const store = openStore(':memory:');
+  store.upsertMapping({ localKey: 'quest:1', googleId: 'g1', hash: 'h1', calendar: 'main', googleUpdated: '2026-11-26T01:00:00.000Z', localUpdated: '2026-11-26T02:00:00.000Z' });
+  assert.deepEqual(store.listMappings(), [{
+    localKey: 'quest:1', googleId: 'g1', hash: 'h1', frozen: 0, calendar: 'main',
+    googleUpdated: '2026-11-26T01:00:00.000Z', localUpdated: '2026-11-26T02:00:00.000Z',
+  }]);
+});
+
+test('deleting a locked imported quest hides its Google event', () => {
+  const store = openStore(':memory:');
+  const { id: _ignored, ...base } = seminar;
+  const id = store.saveQuest({ ...base, origin: 'google', googleLocked: true });
+  store.upsertMapping({ localKey: 'quest:' + id, googleId: 'g1', calendar: 'main' });
+  store.deleteQuest(id);
+  assert.deepEqual(store.listHiddenGoogleEvents(), ['g1']);
+  // An ordinary quest leaves the list alone.
+  const plain = store.saveQuest(base);
+  store.upsertMapping({ localKey: 'quest:' + plain, googleId: 'g2' });
+  store.deleteQuest(plain);
+  assert.deepEqual(store.listHiddenGoogleEvents(), ['g1']);
+  store.hideGoogleEvent('g3');
+  store.hideGoogleEvent('g3');
+  assert.deepEqual(store.listHiddenGoogleEvents(), ['g1', 'g3']);
 });

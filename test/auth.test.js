@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { createAuth, SCOPE } = require('../src/google/auth');
+const { createAuth, SCOPE, SCOPES } = require('../src/google/auth');
 
 // Stand-in for Electron's safeStorage: "encrypts" by base64 + a marker.
 const fakeSafeStorage = {
@@ -89,6 +89,32 @@ test('connect runs the loopback sign-in and saves encrypted tokens', async () =>
   const client = auth.getClient();
   assert.equal(client.credentials.refresh_token, 'refresh-1');
   assert.equal(client.options.clientId, 'id-123');
+});
+
+test('connect asks for the events scope only when wide', async () => {
+  const auth = makeAuth(tempFile());
+  await auth.connect({ openExternal: browserThatAllows() });
+  assert.deepEqual(FakeOAuth2Client.authOptions.scope, [SCOPES.app]);
+  await auth.connect({ openExternal: browserThatAllows(), wide: true });
+  assert.deepEqual(FakeOAuth2Client.authOptions.scope, [SCOPES.app, SCOPES.events]);
+  assert.equal(FakeOAuth2Client.authOptions.include_granted_scopes, true);
+  assert.equal(SCOPES.events, 'https://www.googleapis.com/auth/calendar.events');
+});
+
+test('hasWideScope reads the saved tokens', async () => {
+  const file = tempFile();
+  const auth = makeAuth(file);
+  assert.equal(auth.hasWideScope(), false);
+  await auth.connect({ openExternal: browserThatAllows() });
+  assert.equal(auth.hasWideScope(), false);
+  const orig = FakeOAuth2Client.prototype.getToken;
+  FakeOAuth2Client.prototype.getToken = async () => ({ tokens: { access_token: 'a', refresh_token: 'r', scope: `${SCOPES.app} ${SCOPES.events}` } });
+  try {
+    await auth.connect({ openExternal: browserThatAllows(), wide: true });
+  } finally {
+    FakeOAuth2Client.prototype.getToken = orig;
+  }
+  assert.equal(auth.hasWideScope(), true);
 });
 
 test('refreshed tokens are saved and keep the refresh token', async () => {

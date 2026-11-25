@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildDesiredEvents, hashBody, TIMEZONE, CALENDAR_NAME } = require('../src/google/payloads');
+const { buildDesiredEvents, buildMainBodies, hashBody, TIMEZONE, CALENDAR_NAME } = require('../src/google/payloads');
 const { makeWorld, seminar, olympiad, midterm, moveCalc } = require('./fixtures');
 const { DEFAULT_SETTINGS } = require('../src/db');
 
@@ -99,6 +99,7 @@ test('a bounty is a 15-minute event ending at the due time, with the same two re
     // Counted from the event's start (23.44): 2 h before 23.59 is 105 min;
     // 20.00 the evening before is 27 h 44 min = 1664 min.
     reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 105 }, { method: 'popup', minutes: 1664 }] },
+    extendedProperties: { private: { localKey: 'deadline:7' } },
   });
 });
 
@@ -114,4 +115,46 @@ test('a bounty due just after midnight starts the evening before', () => {
 test('a ticked bounty is not in Google', () => {
   const list = buildDesiredEvents(makeWorld(), settings, [{ ...calcHw, done: true }]);
   assert.equal(event(list, 'deadline:7'), undefined);
+});
+
+test('every ⚔ body carries its localKey', () => {
+  const world = makeWorld();
+  world.changes.push(moveCalc);
+  const list = buildDesiredEvents(world, settings);
+  for (const item of list) {
+    assert.deepEqual(item.body.extendedProperties, { private: { localKey: item.localKey } });
+  }
+});
+
+test('imported quests are not in buildDesiredEvents', () => {
+  const world = makeWorld();
+  world.quests.push({ ...seminar, id: 99, origin: 'google', date: '2026-11-27' });
+  assert.equal(buildDesiredEvents(world, settings).some((e) => e.localKey === 'quest:99'), false);
+});
+
+const imported = { ...seminar, id: 50, origin: 'google', googleLocked: false, name: 'Dentist', note: 'Bring card', date: '2026-12-01', start: '10:00', end: '11:00', endDate: null, allDay: false };
+
+test('buildMainBodies leaves out locked and past quests and has no reminders', () => {
+  const world = makeWorld();
+  world.quests.push(
+    imported,
+    { ...imported, id: 51, googleLocked: true },
+    { ...imported, id: 52, date: '2026-11-20' },
+    { ...imported, id: 53, date: '2026-11-20', endDate: '2026-12-02' }, // still running
+  );
+  const list = buildMainBodies(world, '2026-11-26');
+  assert.deepEqual(list.map((e) => e.localKey), ['quest:50', 'quest:53']);
+  assert.deepEqual(list[0].body, {
+    summary: 'Dentist', description: 'Bring card',
+    start: { dateTime: '2026-12-01T10:00:00', timeZone: 'Asia/Jakarta' },
+    end: { dateTime: '2026-12-01T11:00:00', timeZone: 'Asia/Jakarta' },
+  });
+});
+
+test('an all-day imported quest is written back as all-day', () => {
+  const world = makeWorld();
+  world.quests.push({ ...imported, allDay: true, start: '00:00', end: '23:59', endDate: '2026-12-02' });
+  const [item] = buildMainBodies(world, '2026-11-26');
+  assert.deepEqual(item.body.start, { date: '2026-12-01' });
+  assert.deepEqual(item.body.end, { date: '2026-12-03' });
 });

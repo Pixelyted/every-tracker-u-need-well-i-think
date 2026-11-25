@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('dungeon', {
   googleConnect: call('googleConnect'),
   googleDisconnect: call('googleDisconnect'),
   pushNow: call('pushNow'),
+  setMainSync: call('setMainSync'),
   getPushStatus: call('getPushStatus'),
   getTrayStatus: call('getTrayStatus'),
   // ---------- Treasury ----------

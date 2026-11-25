@@ -111,6 +111,12 @@ function weeklyEvent(world, quest, settings, dayOf) {
   };
 }
 
+// Start and end for a quest's slot. event-time.js needs TIMEZONE from this
+// file, so it is loaded on first use instead of at the top.
+function slotTimes(slot) {
+  return require('./event-time').slotToEventTimes(slot);
+}
+
 function onceEvent(quest, settings, dayOf) {
   const occ = dayOf(quest.date).find((o) => o.key === `q${quest.id}@${quest.date}`);
   // Cancelled by a limited event: no phone reminder for something that
@@ -121,8 +127,8 @@ function onceEvent(quest, settings, dayOf) {
     body: singleEventBody({
       summary: quest.name,
       note: quest.note,
-      start: googleTime(quest.date, quest.start),
-      end: googleTime(quest.date, quest.end),
+      // A multi-day once quest ends on its endDate.
+      ...slotTimes({ date: quest.date, start: quest.start, endDate: quest.endDate || null, end: quest.end, allDay: false }),
       reminders: remindersFor(quest, settings),
       clashes: clashLines([occ], dayOf),
     }),
@@ -211,6 +217,8 @@ function buildDesiredEvents(world, settings, deadlines = []) {
   const dayOf = makeDayCache(world);
   const desired = [];
   for (const quest of world.quests) {
+    // Imported from Google: it lives there already, never copy it into ⚔.
+    if (quest.origin === 'google') continue;
     let item = null;
     if (quest.kind === 'limited') item = limitedEvent(world, quest, settings, dayOf);
     else if (quest.repeat === 'once') item = onceEvent(quest, settings, dayOf);
@@ -226,7 +234,31 @@ function buildDesiredEvents(world, settings, deadlines = []) {
     const item = deadlineEvent(deadline);
     if (item) desired.push(item);
   }
-  return desired;
+  // The app finds its events again by this key (even if mappings are lost).
+  return desired.map((item) => ({
+    ...item,
+    body: { ...item.body, extendedProperties: { private: { localKey: item.localKey } } },
+  }));
+}
+
+// What to write back to the main calendar for quests imported from there:
+// only title, note and time (no reminders, no ⚠ markers). Locked quests
+// and quests that are already over are left alone.
+function buildMainBodies(world, today) {
+  const bodies = [];
+  for (const quest of world.quests) {
+    if (quest.origin !== 'google' || quest.googleLocked) continue;
+    if ((quest.endDate || quest.date) < today) continue;
+    bodies.push({
+      localKey: 'quest:' + quest.id,
+      body: {
+        summary: quest.name,
+        description: quest.note || '',
+        ...slotTimes({ date: quest.date, start: quest.start, endDate: quest.endDate || null, end: quest.end, allDay: !!quest.allDay }),
+      },
+    });
+  }
+  return bodies;
 }
 
 // Turns any value into JSON with object keys sorted, so two bodies with the
@@ -246,4 +278,4 @@ function hashBody(body) {
   return crypto.createHash('sha256').update(stableStringify(body)).digest('hex');
 }
 
-module.exports = { TIMEZONE, CALENDAR_NAME, buildDesiredEvents, hashBody };
+module.exports = { TIMEZONE, CALENDAR_NAME, buildDesiredEvents, buildMainBodies, hashBody };

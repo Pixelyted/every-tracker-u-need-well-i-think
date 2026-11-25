@@ -46,6 +46,22 @@ function validateOnce(quest) {
   return isDate(quest.date) ? [] : ['Pick a date'];
 }
 
+// A one-time quest that ends on a later (or earlier, by mistake) date than it
+// starts. It may end earlier in the day than it starts, e.g. 20:00 to 02:00.
+function isMultiDayInput(quest) {
+  return quest.repeat === 'once' && Boolean(quest.endDate) && quest.endDate !== quest.date;
+}
+
+function checkMultiDayTimes(quest) {
+  if (!isDate(quest.date) || !isDate(quest.endDate)) return ['Pick a start date and an end date'];
+  if (!isTime(quest.start)) return ['Start time is not a valid time (try 07.00)'];
+  if (!isTime(quest.end)) return ['End time is not a valid time (try 09.30)'];
+  if (compareSlot(quest.date, quest.start, quest.endDate, quest.end) >= 0) {
+    return ['The quest must end after it starts'];
+  }
+  return [];
+}
+
 function validateLimited(quest) {
   if (!isDate(quest.startDate) || !isDate(quest.endDate)) return ['Pick a start date and an end date'];
   if (!isTime(quest.start) || !isTime(quest.end)) return ['Start and end need valid times (try 09.00)'];
@@ -59,6 +75,11 @@ function validateQuest(quest, world) {
   const errors = [];
   if (isBlank(quest.name)) errors.push('Give the quest a name');
 
+  // Quests imported from Google are one-time only; the sync can't repeat them.
+  if (quest.origin === 'google' && (quest.repeat === 'weekly' || quest.kind === 'limited')) {
+    errors.push('A quest from Google stays a one-time quest');
+  }
+
   if (quest.kind === 'limited') {
     return errors.concat(validateLimited(quest));
   }
@@ -66,7 +87,7 @@ function validateQuest(quest, world) {
     return errors.concat(['Pick a quest type']);
   }
 
-  errors.push(...checkSameDayTimes(quest.start, quest.end));
+  errors.push(...(isMultiDayInput(quest) ? checkMultiDayTimes(quest) : checkSameDayTimes(quest.start, quest.end)));
   if (quest.repeat === 'weekly') errors.push(...validateWeekly(quest, world));
   else if (quest.repeat === 'once') errors.push(...validateOnce(quest));
   else errors.push('Pick "Every week" or "Once"');

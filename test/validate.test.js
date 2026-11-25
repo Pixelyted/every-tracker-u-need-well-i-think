@@ -60,3 +60,18 @@ test('validateHabit', () => {
     assert.ok(validateHabit({ name: 'X', kind: 'weekly', target }).includes('Pick a target from 1 to 7 days'));
   }
 });
+
+const validOnce = { kind: 'side', repeat: 'once', name: 'x', date: '2026-11-30', endDate: null, start: '20:00', end: '21:00' };
+
+test('once quest over two dates may end earlier in the day than it starts', () => {
+  const overnight = { ...validOnce, endDate: '2026-12-01', end: '02:00' };
+  assert.deepEqual(validateQuest(overnight, world), []);
+  assert.deepEqual(validateQuest({ ...overnight, endDate: '2026-11-29' }, world), ['The quest must end after it starts']);
+});
+
+test('an imported quest cannot become weekly or limited', () => {
+  const msg = 'A quest from Google stays a one-time quest';
+  assert.ok(validateQuest({ ...validOnce, origin: 'google', repeat: 'weekly', weekday: 1 }, world).includes(msg));
+  assert.ok(validateQuest({ ...validOnce, origin: 'google', kind: 'limited' }, world).includes(msg));
+  assert.deepEqual(validateQuest({ ...validOnce, origin: 'google' }, world), []);
+});

@@ -337,3 +337,15 @@ test('setBalance(null) reports errors instead of throwing', () => {
   const { h } = treasurySetup();
   assert.equal(h.setBalance(null).ok, false);
 });
+
+test('getQuest says whether an imported quest is still linked to its Google event', () => {
+  const { store, h } = setup();
+  const linked = store.saveQuest({ kind: 'side', repeat: 'once', name: 'Dentist', date: '2026-12-02', start: '10:00', end: '11:00', origin: 'google' });
+  const unlinked = store.saveQuest({ kind: 'side', repeat: 'once', name: 'Gym', date: '2026-12-03', start: '10:00', end: '11:00', origin: 'google' });
+  const own = store.saveQuest({ kind: 'side', repeat: 'once', name: 'Errand', date: '2026-12-04', start: '10:00', end: '11:00' });
+  store.upsertMapping({ localKey: 'quest:' + linked, googleId: 'm1', hash: null, calendar: 'main', googleUpdated: null, localUpdated: null });
+  assert.equal(h.getQuest(linked).googleLinked, true);
+  assert.equal(h.getQuest(unlinked).googleLinked, false);
+  assert.equal(h.getQuest(own).googleLinked, false);
+  assert.equal(h.getQuest(999), null);
+});

@@ -105,3 +105,24 @@ test('period stats', () => {
     main: 2, boss: 1, bountiesOnTime: 1, bountiesDue: 2, weeksWon: 1, weeksJudged: 2,
   });
 });
+
+test('a multi-day main once quest earns XP once, on its last day', () => {
+  const { quest } = require('./fixtures');
+  const world = makeWorld();
+  world.quests.push(quest({ id: 40, kind: 'main', repeat: 'once', name: 'Trip', date: '2026-11-30', endDate: '2026-12-01', start: '20:00', end: '02:00' }));
+  const rows = clearedAwards(world, '2026-11-30', { date: '2026-12-02', time: '12:00' }).filter((r) => r.label.includes('Trip'));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].date, '2026-12-01');
+  // Still on the first day: nothing yet.
+  const early = clearedAwards(world, '2026-11-30', { date: '2026-11-30', time: '23:00' }).filter((r) => r.label.includes('Trip'));
+  assert.equal(early.length, 0);
+});
+
+test('a multi-day main quest ending at midnight earns XP once, on its start day', () => {
+  const { quest } = require('./fixtures');
+  const world = makeWorld();
+  world.quests.push(quest({ id: 40, kind: 'main', repeat: 'once', name: 'Late', date: '2026-11-30', endDate: '2026-12-01', start: '22:00', end: '00:00' }));
+  const rows = clearedAwards(world, '2026-11-30', { date: '2026-12-02', time: '12:00' }).filter((r) => r.label.includes('Late'));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].date, '2026-11-30');
+});

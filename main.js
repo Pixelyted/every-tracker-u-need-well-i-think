@@ -14,7 +14,7 @@ const { applyAutostart } = require('./src/autostart');
 const { guardNavigation } = require('./src/window-guard');
 const { createAuth } = require('./src/google/auth');
 const { createApi } = require('./src/google/api');
-const { runPush } = require('./src/google/push');
+const { runSync } = require('./src/google/sync');
 const { createPushScheduler } = require('./src/google/scheduler');
 
 const ICON = path.join(__dirname, 'ui', 'assets', 'icon.png');
@@ -184,9 +184,14 @@ function showNotification({ title, body }, onClick = showWindow) {
 
 // ---------- Google push ----------
 
+const HELD_DELETES_WINDOW_MS = 10 * 60 * 1000;
+
 function sendToWindow(channel) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel);
 }
+
+// Set by "Sync now" for exactly one run, to let held deletions through.
+let allowManyDeletesOnce = false;
 
 // One push with the saved sign-in. Local data is never changed by a failure.
 async function pushOnce() {
@@ -202,8 +207,24 @@ async function pushOnce() {
     return { ok: false, error, authExpired: false };
   }
   if (!client) return { ok: false, error: 'Not connected to Google', authExpired: false };
-  const result = await runPush({ api: createApi(client), store });
+  // Main calendar wanted but the sign-in lacks permission: sync ⚔ only and
+  // say why, instead of failing the whole run.
+  const wantsMain = Boolean(store.getSettings().googleMainSync);
+  const needsWide = wantsMain && !auth.hasWideScope();
+  const allowManyDeletes = allowManyDeletesOnce;
+  allowManyDeletesOnce = false;
+  const result = await runSync({ api: createApi(client), store, allowManyDeletes, mainSync: wantsMain && !needsWide });
+  if (needsWide && result.ok) {
+    const last = store.getSettings().lastPush;
+    store.setSettings({ lastPush: { ...last, error: 'Reconnect Google to allow your main calendar' } });
+  }
   if (!result.ok) console.log('[google] push failed: ' + result.error);
+  // Changes came in from Google: redraw the window and re-plan reminders.
+  // Not onChange(): that would ask the scheduler for yet another sync.
+  if (result.counts && result.counts.pulled > 0) {
+    notifyWindow();
+    if (notifier) notifier.replan();
+  }
   sendToWindow('dungeon:push-status');
   return result;
 }
@@ -240,7 +261,8 @@ function setUpGoogle() {
 const googleHandlers = {
   async googleConnect() {
     try {
-      await auth.connect({ openExternal: (url) => shell.openExternal(url) });
+      // Reconnecting (every 7 days) keeps the main calendar working.
+      await auth.connect({ openExternal: (url) => shell.openExternal(url), wide: Boolean(store.getSettings().googleMainSync) });
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -259,7 +281,37 @@ const googleHandlers = {
   },
   async pushNow() {
     if (!auth.isConnected()) return { ok: false, error: 'Not connected to Google' };
-    return pushScheduler.pushNow();
+    // Held deletions may go through if this "Sync now" follows the hold closely.
+    const last = store.getSettings().lastPush;
+    const fresh = last && Date.now() - new Date(last.at).getTime() < HELD_DELETES_WINDOW_MS;
+    allowManyDeletesOnce = Boolean(last && last.heldDeletes && fresh);
+    try {
+      return await pushScheduler.pushNow();
+    } finally {
+      allowManyDeletesOnce = false;
+    }
+  },
+  // Turns main calendar sync on or off. Off keeps imported quests and their
+  // mappings; sync just stops reading the main calendar.
+  async setMainSync(on) {
+    on = Boolean(on);
+    if (on && !(auth.isConnected() && auth.hasWideScope())) {
+      try {
+        await auth.connect({ openExternal: (url) => shell.openExternal(url), wide: true });
+      } catch (err) {
+        store.setSettings({ googleMainSync: false });
+        return { ok: false, error: err.message };
+      }
+      store.setSettings({ googlePush: true });
+      pushScheduler.reconnected();
+    }
+    store.setSettings({ googleMainSync: on });
+    sendToWindow('dungeon:push-status');
+    if (on) {
+      const push = await pushScheduler.pushNow();
+      return { ok: true, push };
+    }
+    return { ok: true };
   },
   async getPushStatus() {
     const settings = store.getSettings();
@@ -269,6 +321,9 @@ const googleHandlers = {
       enabled: settings.googlePush,
       authExpired: auth.isConnected() && (pushScheduler.isAuthExpired() || Boolean(last && last.authExpired)),
       lastPush: last,
+      mainSync: Boolean(settings.googleMainSync),
+      needsWideScope: Boolean(settings.googleMainSync) && auth.isConnected() && !auth.hasWideScope(),
+      heldDeletes: (last && last.heldDeletes) || null,
     };
   },
 };

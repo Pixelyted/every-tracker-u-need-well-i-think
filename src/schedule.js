@@ -38,6 +38,7 @@ function makeOccurrence(quest, date, start, end, extra = {}) {
     color: quest.color,
     icon: quest.icon,
     note: quest.note,
+    origin: quest.origin || null,
     date,
     start,
     end,
@@ -53,16 +54,36 @@ function makeOccurrence(quest, date, start, end, extra = {}) {
   };
 }
 
-// The part of a limited event that falls on `date`, as { start, end }, or
-// null when the event doesn't touch that day. Days in the middle of the
-// event run from '00:00' to '24:00'. An event ending at exactly 00:00 on a
-// day has zero length on that day, so it does not touch it.
+// The part of an event that falls on `date`, as { start, end }, or null when
+// the event doesn't touch that day. Days in the middle of the event run from
+// '00:00' to '24:00'. An event ending at exactly 00:00 on a day has zero
+// length on that day, so it does not touch it.
+function sliceOn(startDate, start, endDate, end, date) {
+  if (date < startDate || date > endDate) return null;
+  const sliceStart = date === startDate ? start : '00:00';
+  const sliceEnd = date === endDate ? end : '24:00';
+  if (toMinutes(sliceEnd) <= toMinutes(sliceStart)) return null;
+  return { start: sliceStart, end: sliceEnd };
+}
+
 function limitedSliceOn(quest, date) {
-  if (date < quest.startDate || date > quest.endDate) return null;
-  const start = date === quest.startDate ? quest.start : '00:00';
-  const end = date === quest.endDate ? quest.end : '24:00';
-  if (toMinutes(end) <= toMinutes(start)) return null;
-  return { start, end };
+  return sliceOn(quest.startDate, quest.start, quest.endDate, quest.end, date);
+}
+
+// A one-time quest can span several days (an overnight event imported from
+// Google). endDate is null or equal to date for a normal one-day quest.
+function isMultiDay(quest) {
+  return quest.repeat === 'once' && Boolean(quest.endDate) && quest.endDate > quest.date;
+}
+
+// The last date the quest really shows on. Ending at exactly 00:00 means the
+// final day has zero length, so the day before is the last one.
+function lastSliceDate(quest) {
+  return toMinutes(quest.end) === 0 ? addDays(quest.endDate, -1) : quest.endDate;
+}
+
+function onceSliceOn(quest, date) {
+  return sliceOn(quest.date, quest.start, quest.endDate, quest.end, date);
 }
 
 function overlaps(a, b) {
@@ -133,11 +154,24 @@ function applyBreaks(world, date, occurrences) {
   }
 }
 
-// Step 4: one-time quests on this date.
+// Step 4: one-time quests on this date. A multi-day one shows on every day
+// it touches, sliced like a limited event, but it never cancels anything.
 function onceOccurrences(world, date) {
-  return world.quests
-    .filter((q) => q.repeat === 'once' && q.date === date)
-    .map((q) => makeOccurrence(q, date, q.start, q.end));
+  const result = [];
+  for (const q of world.quests) {
+    if (q.repeat !== 'once') continue;
+    if (!isMultiDay(q)) {
+      if (q.date === date) result.push(makeOccurrence(q, date, q.start, q.end));
+      continue;
+    }
+    const slice = onceSliceOn(q, date);
+    if (!slice) continue;
+    result.push(makeOccurrence(q, date, slice.start, slice.end, {
+      isFirstDay: date === q.date,
+      isLastDay: date === lastSliceDate(q),
+    }));
+  }
+  return result;
 }
 
 // Step 5: limited events touching this date.
@@ -206,6 +240,9 @@ function expandRange(world, startDate, endDate) {
 function occurrenceDates(world, quest) {
   if (quest.kind === 'limited') {
     return datesInRange(quest.startDate, quest.endDate).filter((d) => limitedSliceOn(quest, d));
+  }
+  if (isMultiDay(quest)) {
+    return datesInRange(quest.date, quest.endDate).filter((d) => onceSliceOn(quest, d));
   }
   if (quest.repeat === 'once') return [quest.date];
   if (!world.semester) return [];

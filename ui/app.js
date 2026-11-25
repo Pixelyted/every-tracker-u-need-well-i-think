@@ -255,6 +255,7 @@ function blockTag(occ) {
   if (occ.status === 'moved') return 'moved → ' + formatDayShort(occ.movedTo.date);
   if (occ.status === 'cancelled') return '✖ CANCELLED';
   if (occ.isMakeup) return '↪ make-up';
+  if (occ.origin === 'google') return '📅';
   return null;
 }
 
@@ -263,6 +264,7 @@ function blockTitle(occ) {
   if (occ.status === 'moved') text += `\nMoved to ${formatDayShort(occ.movedTo.date)} ${formatTime(occ.movedTo.start)}`;
   if (occ.isMakeup) text += `\nMake-up for ${formatDayShort(occ.movedFrom)}`;
   if (occ.cancelledBy) text += `\nCancelled by ${occ.cancelledBy}`;
+  if (occ.origin === 'google') text += '\nFrom your Google calendar';
   if (occ.note) text += `\n${occ.note}`;
   return text;
 }

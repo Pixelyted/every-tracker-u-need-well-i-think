@@ -7,7 +7,7 @@ installs keep their data.
 A personal schedule maker for Fedora with a pixel-dungeon look. It shows
 your weekly class timetable plus one-off quests and multi-day limited
 events, warns about clashes, handles skips, moves and breaks, sends desktop
-reminders, and can push a copy to a Google calendar. It also has a character
+reminders, and can sync with Google Calendar. It also has a character
 profile with habits and XP, deadlines ("bounties"), and a 50/30/20 budget
 fed by bank-statement PDFs.
 
@@ -53,8 +53,11 @@ Reminders only fire while the app runs, so closing the window does not quit it:
 
 ## Google Calendar (optional)
 
-The app can push your quests one way into a Google calendar called
-**⚔ every tracker u need, well i think**, so your phone reminds you too. Setup steps:
+The app syncs two ways with Google Calendar. Your quests go into a Google
+calendar called **⚔ every tracker u need, well i think**, so your phone
+reminds you too, and edits you make there come back. If you tick **Two-way
+with my main Google calendar** in Settings, your upcoming one-off Google
+events also show up as side quests tagged 📅. Setup steps:
 [docs/google-setup.md](docs/google-setup.md). While the Google app stays in
 Testing mode, the sign-in ends every 7 days. The app then shows a
 "Google disconnected, reconnect in Settings" notification and a Reconnect
@@ -103,7 +106,7 @@ with the lessons learned and a practice path.
 | `src/validate.js` | form checks |
 | `src/db.js` | loading and saving in SQLite |
 | `src/notify-plan.js` | which reminders to fire, and when |
-| `src/google/` | Google sign-in (`auth.js`), the Calendar API (`api.js`), what to push (`payloads.js`), how (`push.js`) and when (`scheduler.js`) |
+| `src/google/` | Google sign-in (`auth.js`), the Calendar API (`api.js`), event times (`event-time.js`), what to push (`payloads.js`), pushing it (`push.js`), working out what Google's changes mean for the app (`pull.js`), one sync run that reads Google, applies the changes to the app and then pushes (`sync.js`), and when to sync (`scheduler.js`) |
 | `src/bca-parse.js`, `src/merchant.js` | reads BCA statement text into payments, and tidies merchant names |
 | `src/finance.js` | allowance cycles, the 50/30/20 split and balance maths |
 | `src/pdf-text.js` | turns a PDF into text with `pdftotext` |

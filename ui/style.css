@@ -605,6 +605,7 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--torch); width:
 .break-item .btn { padding: 2px 8px; font-size: 13px; }
 .tray-hint { border-left: 3px solid var(--torch); padding-left: 8px; }
 
+.push-status { white-space: pre-line; }
 .push-status.warn { color: #ff8a80; }
 #reconnect-google[hidden] { display: none; }
 #reconnect-google { animation: flicker-warn 1.6s steps(2) infinite; }
